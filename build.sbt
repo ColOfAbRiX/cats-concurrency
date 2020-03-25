@@ -5,8 +5,11 @@ lazy val ScalaLangVersion = "2.13.0"
 
 // General
 ThisBuild / organization := "com.colofabrix.scala.fibers"
-ThisBuild / scalaVersion := ScalaLangVersion
+
+// Not sure why, but I have to use all of these versions
 scalaVersion := ScalaLangVersion
+Global / scalaVersion := ScalaLangVersion
+ThisBuild / scalaVersion := ScalaLangVersion
 
 // Compiler options
 // ThisBuild / scalacOptions ++= Compiler.TpolecatOptions ++ Seq("-P:splain:all")

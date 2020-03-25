@@ -8,9 +8,14 @@ object CSManager {
   private[this] val threadPools = scala.collection.mutable.HashMap.empty[Int, ContextShift[IO]]
 
   def apply(nThreads: Int): ContextShift[IO] = {
-    lazy val threadFactory = new ThreadFactory {
-      val threadNumber                   = new java.util.concurrent.atomic.AtomicInteger(0)
-      def newThread(r: Runnable): Thread = new Thread(r, s"thread-${threadNumber.getAndIncrement()}")
+    lazy val threadFactory: ThreadFactory = new ThreadFactory {
+      val group = Option(System.getSecurityManager)
+        .map(_.getThreadGroup)
+        .getOrElse(Thread.currentThread.getThreadGroup)
+
+      val threadCounter = new java.util.concurrent.atomic.AtomicInteger(0)
+
+      def newThread(r: Runnable): Thread = new Thread(r, s"thread-${threadCounter.getAndIncrement()}")
     }
 
     lazy val newContextShift = IO.contextShift(
@@ -21,32 +26,53 @@ object CSManager {
 
     threadPools.getOrElseUpdate(nThreads, newContextShift)
   }
+
+  def newContextShift(name: String, parallelism: Option[Int], priority: Option[Int]): ContextShift[IO] = {
+    val threadFactory: ThreadFactory = new ThreadFactory {
+      val threadCounter = new java.util.concurrent.atomic.AtomicInteger(0)
+
+      val group = Option(System.getSecurityManager)
+        .map(_.getThreadGroup)
+        .getOrElse(Thread.currentThread.getThreadGroup)
+
+      def newThread(runnable: Runnable): Thread = {
+        val threadName = name + "-thread-" + threadCounter.getAndIncrement.toString
+        val thread     = new Thread(group, runnable, threadName)
+        thread.setPriority(priority.fold(Thread.NORM_PRIORITY)(identity))
+        thread
+      }
+    }
+
+    val threadPoolFactory = parallelism match {
+      case None        => Executors.newCachedThreadPool(threadFactory)
+      case Some(value) => Executors.newFixedThreadPool(value, threadFactory)
+    }
+
+    IO.contextShift(ExecutionContext.fromExecutor(threadPoolFactory))
+  }
 }
-/* JAVA
-static class DefaultThreadFactory implements ThreadFactory {
-    private static final AtomicInteger poolNumber = new AtomicInteger(1);
-    private final ThreadGroup group;
-    private final AtomicInteger threadNumber = new AtomicInteger(1);
-    private final String namePrefix;
 
-    DefaultThreadFactory() {
-        SecurityManager s = System.getSecurityManager();
-        group = (s != null) ? s.getThreadGroup() :
-                              Thread.currentThread().getThreadGroup();
-        namePrefix = "pool-" +
-                      poolNumber.getAndIncrement() +
-                      "-thread-";
-    }
+/*
+import java.util.concurrent.ThreadFactory
+import java.util.concurrent.atomic.AtomicInteger
 
-    public Thread newThread(Runnable r) {
-        Thread t = new Thread(group, r,
-                              namePrefix + threadNumber.getAndIncrement(),
-                              0);
-        if (t.isDaemon())
-            t.setDaemon(false);
-        if (t.getPriority() != Thread.NORM_PRIORITY)
-            t.setPriority(Thread.NORM_PRIORITY);
-        return t;
-    }
+object DefaultThreadFactory {
+  private val poolNumber = new AtomicInteger(1)
+}
+
+class DefaultThreadFactory() extends ThreadFactory {
+  private val threadNumber = new AtomicInteger(1)
+  private val s: SecurityManager = System.getSecurityManager
+  private val group = if ( s != null ) s.getThreadGroup else Thread.currentThread.getThreadGroup
+  private val namePrefix = "pool-" + DefaultThreadFactory.poolNumber.getAndIncrement + "-thread-"
+
+  def newThread(r: Runnable): Thread = {
+    val t = new Thread(group, r, namePrefix + threadNumber.getAndIncrement, 0)
+    if (t.isDaemon)
+      t.setDaemon(false)
+    if (t.getPriority != Thread.NORM_PRIORITY)
+      t.setPriority(Thread.NORM_PRIORITY)
+    t
+  }
 }
  */
